@@ -2,7 +2,14 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import { config } from './config.js';
 import { pool } from './db.js';
-import wbRoutes from './routes/wb.js';
+import masterRoutes      from './routes/master.js';
+import overviewRoutes    from './routes/overview.js';
+import utilizationRoutes from './routes/utilization.js';
+import downtimeRoutes    from './routes/downtime.js';
+import inventoryRoutes   from './routes/inventory.js';
+import techRoutes        from './routes/tech.js';
+import wbRoutes          from './routes/wb.js';
+import debugRoutes       from './routes/debug.js';
 
 const app = Fastify({ logger: true });
 
@@ -20,8 +27,15 @@ app.get('/api/v1/health', async (_req, reply) => {
   }
 });
 
-// ── WB routes ─────────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────
+await app.register(masterRoutes);
+await app.register(overviewRoutes);
+await app.register(utilizationRoutes);
+await app.register(downtimeRoutes);
+await app.register(inventoryRoutes);
+await app.register(techRoutes);
 await app.register(wbRoutes);
+await app.register(debugRoutes);
 
 // ── Start ─────────────────────────────────────────────────────────────────
 try {

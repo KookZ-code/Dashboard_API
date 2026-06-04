@@ -165,6 +165,37 @@ async function queryOpenJobs(): Promise<OpenJob[]> {
 
 export default async function wbRoutes(app: FastifyInstance): Promise<void> {
 
+  // ── wb/packages ────────────────────────────────────────────────────────────
+  app.get<{ Querystring: { date: string } }>('/api/v1/wb/packages', {
+    preHandler: async (req, reply) => {
+      if (config.api.key && req.headers['x-api-key'] !== config.api.key) {
+        await reply.code(401).send({ status: 'error', error: { code: 401, message: 'Invalid API key' } });
+      }
+    },
+  }, async (req, reply) => {
+    const { date } = req.query;
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return reply.code(400).send({ status: 'error', error: { code: 400, message: 'date (YYYY-MM-DD) required' } });
+    }
+    const rs = await pool.request()
+      .input('date_val', sql.VarChar, date)
+      .query<{ package_type: string }>(`
+        SELECT DISTINCT [Package Type] AS package_type
+        FROM ${config.view}
+        WHERE [id_operation] = 'WB'
+          AND [Package Type] IS NOT NULL AND [Package Type] != ''
+          AND [datex] >= DATEADD(DAY, -7, @date_val)
+          AND [datex] <  DATEADD(DAY,  1, @date_val)
+        ORDER BY [Package Type]
+      `);
+    const pkgs = rs.recordset.map(r => r.package_type).filter(Boolean).sort();
+    const opts: Array<{ value: string; label: string }> = [{ value: '__ALL__', label: '— All Packages —' }];
+    if (pkgs.some(p => p.toUpperCase().includes('QFN'))) opts.push({ value: '__QFN__', label: '— All QFN —' });
+    opts.push(...pkgs.map(p => ({ value: p, label: p })));
+    return reply.send({ status: 'ok', data: { options: opts, packages: pkgs } });
+  });
+
+  // ── wb/report ──────────────────────────────────────────────────────────────
   app.get<{
     Querystring: { date?: string; shift?: string; packages?: string };
   }>('/api/v1/wb/report', {
