@@ -300,8 +300,8 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
 
         eventList.push({
           job_type: ev.job_type ?? '',
-          t_start:  fmtHhmm(ev.datex),
-          t_end:    fmtHhmm(ev.date_close),
+          t_start:  ev.t_start_fmt ?? '',
+          t_end:    ev.t_end_fmt   ?? '',
           des_job:  ev.des_job ?? '',
           dur_min:  repair + wt,
           is_open:  false,
