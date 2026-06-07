@@ -1,3 +1,6 @@
+// Must be set BEFORE any Date usage so new Date() / getHours() use Thai local time
+process.env.TZ = 'Asia/Bangkok';
+
 import 'dotenv/config';
 import Fastify from 'fastify';
 import { config } from './config.js';

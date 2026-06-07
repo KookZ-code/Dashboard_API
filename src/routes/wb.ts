@@ -78,14 +78,9 @@ function shiftWindow(date: string, shift: string): { start: Date; end: Date } {
   return { start, end };
 }
 
-// mssql returns DateTime as UTC-based Date objects. SQL Server stores Thai local
-// time (UTC+7), so we apply the offset explicitly instead of relying on the
-// Node.js process timezone (which may be UTC on the server).
 function fmtHhmm(d: Date | null): string {
   if (!d) return '';
-  const h = (d.getUTCHours() + 7) % 24;
-  const m = d.getUTCMinutes();
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function round1(v: number): number {
