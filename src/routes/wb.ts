@@ -78,9 +78,14 @@ function shiftWindow(date: string, shift: string): { start: Date; end: Date } {
   return { start, end };
 }
 
+// mssql returns DateTime as UTC-based Date objects. SQL Server stores Thai local
+// time (UTC+7), so we apply the offset explicitly instead of relying on the
+// Node.js process timezone (which may be UTC on the server).
 function fmtHhmm(d: Date | null): string {
   if (!d) return '';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const h = (d.getUTCHours() + 7) % 24;
+  const m = d.getUTCMinutes();
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 function round1(v: number): number {
@@ -300,8 +305,8 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
 
         eventList.push({
           job_type: ev.job_type ?? '',
-          t_start:  ev.t_start_fmt ?? '',
-          t_end:    ev.t_end_fmt   ?? '',
+          t_start:  fmtHhmm(ev.datex),
+          t_end:    fmtHhmm(ev.date_close),
           des_job:  ev.des_job ?? '',
           dur_min:  repair + wt,
           is_open:  false,
