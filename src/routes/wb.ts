@@ -26,6 +26,8 @@ interface ShiftEvent {
   wait_min: number;
   tech_name: string | null;
   package_type: string | null;
+  t_start_fmt: string | null; // FORMAT(datex, 'HH:mm') — SQL Server local time (Thai UTC+7)
+  t_end_fmt:   string | null; // FORMAT(date_close, 'HH:mm')
 }
 
 interface OpenJob {
@@ -137,7 +139,9 @@ async function queryShiftEvents(shiftStart: Date, shiftEnd: Date, refDate: strin
     SELECT k.code_machine,
            se.job_type, se.datex, se.date_ack, se.date_close,
            se.des_job,  se.wait_min, se.tech_name,
-           COALESCE(se.package_type, lp.package_type) AS package_type
+           COALESCE(se.package_type, lp.package_type) AS package_type,
+           FORMAT(se.datex,      'HH:mm') AS t_start_fmt,
+           FORMAT(se.date_close, 'HH:mm') AS t_end_fmt
     FROM key_mc k
     LEFT JOIN shift_ev se ON k.code_machine = se.code_machine
     LEFT JOIN last_pkg lp  ON k.code_machine = lp.code_machine
@@ -239,7 +243,8 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
     let target: string[];
     let pkgLabel: string;
     if (hasAll) {
-      target   = allMachines;
+      // Only include machines that ran a known package this shift (excludes idle/untracked machines)
+      target   = [...machinePkg.keys()].sort();
       pkgLabel = 'All Packages';
     } else if (hasQfn) {
       target   = allMachines.filter(m => (machinePkg.get(m) ?? '').toUpperCase().includes('QFN'));
@@ -295,8 +300,8 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
 
         eventList.push({
           job_type: ev.job_type ?? '',
-          t_start:  fmtHhmm(ev.datex),
-          t_end:    fmtHhmm(ev.date_close),
+          t_start:  ev.t_start_fmt ?? '',
+          t_end:    ev.t_end_fmt   ?? '',
           des_job:  ev.des_job ?? '',
           dur_min:  repair + wt,
           is_open:  false,
@@ -342,7 +347,13 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
     const n        = machineRows.length;
     const fleetMin = n * SHIFT_MIN;
     const avgUtil  = n > 0 ? machineRows.reduce((s, r) => s + r.util_pct, 0) / n : 0;
-    const techSet  = new Set(events.map(e => e.tech_name).filter(Boolean));
+    // Count only real technician job types — exclude SBO operators (by_ack = operator badge)
+    const TECH_JT = new Set(['M/C DOWN', 'ENGINEERING DOWN', 'FACILITY DOWN', 'SETUP', 'CONVERT']);
+    const techSet = new Set(
+      events
+        .filter(e => e.tech_name && TECH_JT.has((e.job_type ?? '').toUpperCase().trim()))
+        .map(e => e.tech_name)
+    );
 
     const sum = (fn: (r: MachineRow) => number) => machineRows.reduce((s, r) => s + fn(r), 0);
     const pct = (mins: number) => fleetMin > 0 ? round1(mins / fleetMin * 100) : 0;
