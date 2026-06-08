@@ -63,24 +63,18 @@ interface MachineRow {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-// Shift window — api_server.py lines 1149-1155
-function shiftWindow(date: string, shift: string): { start: Date; end: Date } {
-  const [y, m, d] = date.split('-').map(Number);
+// Shift window — returns ISO-style strings in Thai local time (no UTC conversion).
+// Using VarChar strings avoids Tedious converting JS Date → UTC before sending to SQL Server,
+// which would shift the window by 7 hours and leak night-shift events into day-shift queries.
+function shiftWindow(date: string, shift: string): { start: string; end: string; label: string } {
   if (shift === 'Day') {
-    return {
-      start: new Date(y, m - 1, d, 7, 0, 0),
-      end:   new Date(y, m - 1, d, 19, 0, 0),
-    };
+    return { start: `${date} 07:00:00`, end: `${date} 19:00:00`, label: '07:00 → 19:00' };
   }
   // Night: previous-evening 19:00 → this-morning 07:00
-  const end   = new Date(y, m - 1, d, 7, 0, 0);
-  const start = new Date(end.getTime() - 12 * 3_600_000);
-  return { start, end };
-}
-
-function fmtHhmm(d: Date | null): string {
-  if (!d) return '';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const [y, m, d] = date.split('-').map(Number);
+  const prev = new Date(y, m - 1, d - 1);
+  const prevStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`;
+  return { start: `${prevStr} 19:00:00`, end: `${date} 07:00:00`, label: '19:00 → 07:00' };
 }
 
 function round1(v: number): number {
@@ -91,13 +85,13 @@ function round1(v: number): number {
 
 // Closed shift events for all WB key machines + last-known package
 // utils/queries.py wb_shift_report() lines 692-750
-async function queryShiftEvents(shiftStart: Date, shiftEnd: Date, refDate: string): Promise<ShiftEvent[]> {
+async function queryShiftEvents(shiftStart: string, shiftEnd: string, refDate: string): Promise<ShiftEvent[]> {
   const v  = config.view;
   const mt = config.machineTable;
   const req = pool.request();
-  req.input('shift_start', sql.DateTime, shiftStart);
-  req.input('shift_end',   sql.DateTime, shiftEnd);
-  req.input('ref_date',    sql.VarChar,  refDate);
+  req.input('shift_start', sql.VarChar, shiftStart);
+  req.input('shift_end',   sql.VarChar, shiftEnd);
+  req.input('ref_date',    sql.VarChar, refDate);
   const result = await req.query<ShiftEvent>(`
     WITH
     key_mc AS (
@@ -215,8 +209,7 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ status: 'error', error: { code: 400, message: 'date (YYYY-MM-DD) required' } });
     }
 
-    const { start: shiftStart, end: shiftEnd } = shiftWindow(date, shift);
-    const timeRange = `${fmtHhmm(shiftStart)} → ${fmtHhmm(shiftEnd)}`;
+    const { start: shiftStart, end: shiftEnd, label: timeRange } = shiftWindow(date, shift);
 
     // Package filter — api_server.py lines 1163-1187
     const pkgList = packages.split(',').map(p => p.trim()).filter(Boolean);
