@@ -22,4 +22,5 @@ export const config = {
   // Table/view names — keep configurable to match Python server
   view:         process.env.VIEW_NAME    ?? 'vw_job_nokey',
   machineTable: process.env.MACHINE_TABLE ?? 'dbo.machine',
+  jobTable:     process.env.JOB_TABLE    ?? 'dbo.job_listx',
 } as const;

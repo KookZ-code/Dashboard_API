@@ -63,4 +63,32 @@ export default async function inventoryRoutes(app: FastifyInstance) {
     `);
     return reply.send({ status: 'ok', data: { rows: rs.recordset } });
   });
+
+  app.get('/api/v1/inventory/last-package', { preHandler: authPreHandler }, async (_req, reply) => {
+    const jt = config.jobTable;
+    const rs = await pool.request().query(`
+      SELECT code_machine, [Package Type] AS package_type,
+             CONVERT(VARCHAR(10), datex, 120) AS last_run
+      FROM (
+        SELECT code_machine, [Package Type], datex,
+               ROW_NUMBER() OVER (PARTITION BY code_machine ORDER BY datex DESC) AS rn
+        FROM ${jt}
+        WHERE code_machine IS NOT NULL AND code_machine != ''
+      ) r
+      WHERE r.rn = 1
+    `);
+    return reply.send({ status: 'ok', data: { packages: rs.recordset } });
+  });
+
+  app.get('/api/v1/inventory/probe-columns', { preHandler: authPreHandler }, async (_req, reply) => {
+    const rs = await pool.request().query(`
+      SELECT COLUMN_NAME AS col
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_CATALOG = '${config.db.database}'
+        AND TABLE_SCHEMA   = 'dbo'
+        AND TABLE_NAME     = 'job_listx'
+      ORDER BY ORDINAL_POSITION
+    `);
+    return reply.send({ status: 'ok', data: { columns: rs.recordset.map((r: any) => r.col) } });
+  });
 }

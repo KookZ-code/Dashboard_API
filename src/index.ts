@@ -12,6 +12,9 @@ import downtimeRoutes    from './routes/downtime.js';
 import inventoryRoutes   from './routes/inventory.js';
 import techRoutes        from './routes/tech.js';
 import wbRoutes          from './routes/wb.js';
+import daRoutes          from './routes/da.js';
+import wbUphRoutes       from './routes/wb-uph.js';
+import daUphRoutes       from './routes/da-uph.js';
 import debugRoutes       from './routes/debug.js';
 
 const app = Fastify({ logger: true });
@@ -38,6 +41,9 @@ await app.register(downtimeRoutes);
 await app.register(inventoryRoutes);
 await app.register(techRoutes);
 await app.register(wbRoutes);
+await app.register(daRoutes);
+await app.register(wbUphRoutes);
+await app.register(daUphRoutes);
 await app.register(debugRoutes);
 
 // ── Start ─────────────────────────────────────────────────────────────────
