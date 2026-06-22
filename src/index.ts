@@ -3,6 +3,8 @@ process.env.TZ = 'Asia/Bangkok';
 
 import 'dotenv/config';
 import Fastify from 'fastify';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config.js';
 import { pool } from './db.js';
 import masterRoutes      from './routes/master.js';
@@ -18,6 +20,52 @@ import daUphRoutes       from './routes/da-uph.js';
 import debugRoutes       from './routes/debug.js';
 
 const app = Fastify({ logger: true });
+
+// ── Swagger ───────────────────────────────────────────────────────────────
+await app.register(swagger, {
+  openapi: {
+    info: { title: 'Dashboard API', version: '1.0.0', description: 'EMH Dashboard API — MSSQL / SQLite / PostgreSQL' },
+    tags: [
+      { name: 'health',      description: 'Health check' },
+      { name: 'master',      description: 'Machine & area master data' },
+      { name: 'overview',    description: 'Factory overview & open jobs' },
+      { name: 'utilization', description: 'Machine utilization' },
+      { name: 'downtime',    description: 'Downtime events & machines' },
+      { name: 'inventory',   description: 'Equipment inventory & last package' },
+      { name: 'tech',        description: 'Tech performance' },
+      { name: 'wb',          description: 'Wire Bond packages & report' },
+      { name: 'da',          description: 'Die Attach packages & report' },
+      { name: 'wb-uph',      description: 'WB UPH monitor (SQLite central.db)' },
+      { name: 'da-uph',      description: 'DA UPH monitor (PostgreSQL)' },
+    ],
+  },
+});
+await app.register(swaggerUi, {
+  routePrefix: '/docs',
+  uiConfig: { docExpansion: 'list', deepLinking: true },
+});
+
+// ── Auto-tag routes by URL prefix ─────────────────────────────────────────
+const TAG_MAP: [string, string][] = [
+  ['/api/v1/wb-uph/',      'wb-uph'],
+  ['/api/v1/da-uph/',      'da-uph'],
+  ['/api/v1/inventory/',   'inventory'],
+  ['/api/v1/utilization/', 'utilization'],
+  ['/api/v1/downtime/',    'downtime'],
+  ['/api/v1/overview/',    'overview'],
+  ['/api/v1/overview',     'overview'],
+  ['/api/v1/areas',        'master'],
+  ['/api/v1/machines',     'master'],
+  ['/api/v1/tech/',        'tech'],
+  ['/api/v1/wb/',          'wb'],
+  ['/api/v1/da/',          'da'],
+  ['/api/v1/health',       'health'],
+];
+app.addHook('onRoute', (route) => {
+  if (route.schema?.tags) return;
+  const tag = TAG_MAP.find(([prefix]) => route.url.startsWith(prefix))?.[1];
+  if (tag) route.schema = { ...route.schema, tags: [tag] };
+});
 
 // ── Health endpoint (no auth) ─────────────────────────────────────────────
 app.get('/api/v1/health', async (_req, reply) => {
