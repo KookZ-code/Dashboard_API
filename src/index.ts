@@ -18,6 +18,10 @@ import daRoutes          from './routes/da.js';
 import wbUphRoutes       from './routes/wb-uph.js';
 import daUphRoutes       from './routes/da-uph.js';
 import debugRoutes       from './routes/debug.js';
+import liveRoutes        from './routes/live.js';
+import authRoutes        from './routes/auth.js';
+import usersRoutes       from './routes/users.js';
+import permissionsRoutes, { ensurePermissionsTable } from './routes/permissions.js';
 
 const app = Fastify({ logger: true });
 
@@ -37,6 +41,7 @@ await app.register(swagger, {
       { name: 'da',          description: 'Die Attach packages & report' },
       { name: 'wb-uph',      description: 'WB UPH monitor (SQLite central.db)' },
       { name: 'da-uph',      description: 'DA UPH monitor (PostgreSQL)' },
+      { name: 'auth',        description: 'Authentication, users & permissions' },
     ],
   },
 });
@@ -60,6 +65,10 @@ const TAG_MAP: [string, string][] = [
   ['/api/v1/wb/',          'wb'],
   ['/api/v1/da/',          'da'],
   ['/api/v1/health',       'health'],
+  ['/api/v1/live/',        'live'],
+  ['/api/v1/auth/',        'auth'],
+  ['/api/v1/users',        'auth'],
+  ['/api/v1/permissions',  'auth'],
 ];
 app.addHook('onRoute', (route) => {
   if (route.schema?.tags) return;
@@ -93,11 +102,17 @@ await app.register(daRoutes);
 await app.register(wbUphRoutes);
 await app.register(daUphRoutes);
 await app.register(debugRoutes);
+await app.register(liveRoutes);
+await app.register(authRoutes);
+await app.register(usersRoutes);
+await app.register(permissionsRoutes);
 
 // ── Start ─────────────────────────────────────────────────────────────────
 try {
   await pool.connect();
   console.log('[db] Connected to SQL Server');
+  await ensurePermissionsTable();
+  console.log('[db] Auth tables ready');
   await app.listen({ port: config.api.port, host: config.api.host });
 } catch (err) {
   app.log.error(err);

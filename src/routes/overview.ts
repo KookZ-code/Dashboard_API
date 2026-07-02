@@ -107,15 +107,16 @@ export default async function overviewRoutes(app: FastifyInstance) {
             `),
       ]);
 
-      const kpi = { total_machines: 0, running: 0, down: 0, waiting: 0, on_process: 0, closed_this_shift: 0 };
+      const kpi = { key_machines: 0, running: 0, mc_down: 0, waiting_for_tech: 0, on_process: 0, closed_this_shift: 0, last_updated: '' };
       if (kpiRs.recordset.length) {
         const r = kpiRs.recordset[0] as any;
-        kpi.total_machines   = Number(r.total_key_machines ?? 0);
-        kpi.waiting          = Number(r.waiting_count ?? 0);
-        kpi.on_process       = Number(r.on_process_count ?? 0);
-        kpi.down             = Number(r.down_count ?? 0);
+        kpi.key_machines      = Number(r.total_key_machines ?? 0);
+        kpi.waiting_for_tech  = Number(r.waiting_count ?? 0);
+        kpi.on_process        = Number(r.on_process_count ?? 0);
+        kpi.mc_down           = Number(r.down_count ?? 0);
         kpi.closed_this_shift = Number(r.closed_this_shift ?? 0);
-        kpi.running = Math.max(0, kpi.total_machines - kpi.down - kpi.waiting - kpi.on_process);
+        kpi.running = Math.max(0, kpi.key_machines - kpi.mc_down - kpi.waiting_for_tech - kpi.on_process);
+        kpi.last_updated = new Date().toISOString();
       }
 
       const matrix = (matRs.recordset as any[]).map(r => ({
@@ -126,7 +127,7 @@ export default async function overviewRoutes(app: FastifyInstance) {
         total:      Number(r.total ?? 0),
       }));
 
-      return reply.send({ status: 'ok', data: { kpi, status_matrix: matrix, updated_at: new Date().toISOString() } });
+      return reply.send({ status: 'ok', data: { kpi, matrix, updated_at: new Date().toISOString() } });
     }
   );
 
@@ -175,7 +176,7 @@ export default async function overviewRoutes(app: FastifyInstance) {
         wire_type:    r.wire_type ?? null,
       }));
 
-      return reply.send({ status: 'ok', data: { jobs } });
+      return reply.send({ status: 'ok', data: jobs });
     }
   );
 }

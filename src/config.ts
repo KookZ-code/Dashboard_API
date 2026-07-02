@@ -23,4 +23,9 @@ export const config = {
   view:         process.env.VIEW_NAME    ?? 'vw_job_nokey',
   machineTable: process.env.MACHINE_TABLE ?? 'dbo.machine',
   jobTable:     process.env.JOB_TABLE    ?? 'dbo.job_listx',
+  // JWT auth
+  jwt: {
+    secret:      process.env.JWT_SECRET      ?? 'emh-dashboard-jwt-secret-2026',
+    expireHours: Number(process.env.JWT_EXPIRE_HOURS ?? 8),
+  },
 } as const;
