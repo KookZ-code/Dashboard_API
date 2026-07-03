@@ -233,7 +233,13 @@ export default async function wbUphRoutes(app: FastifyInstance): Promise<void> {
           if(r.badge_no) a.badge=r.badge_no; if(r.pkg_mpc) a.pkgMpc=r.pkg_mpc;
           if(r.created_at>a.lastScan) a.lastScan=r.created_at; if(r.uph>0) a.uph=r.uph;
         }
-        const out=[...agg.entries()].map(([mid,a])=>({machine_id:mid,badge_no:a.badge,uph:a.uph,bonded_unit:a.bonded,last_scan_ts:a.lastScan||null,pkg_mpc:a.pkgMpc})).sort((a,b)=>b.bonded_unit-a.bonded_unit);
+        const maxUphRows = db.prepare(
+          `SELECT machine_id, MAX(uph) AS max_uph
+           FROM uph_records WHERE voided=0 AND created_at >= datetime(?, '-3 days') AND created_at <= ? ${pkgClause}
+           GROUP BY machine_id`
+        ).all(w.start, w.end, ...pkgArgs) as Array<{machine_id:string; max_uph:number}>;
+        const maxUphMap = new Map(maxUphRows.map(r => [r.machine_id, r.max_uph]));
+        const out=[...agg.entries()].map(([mid,a])=>({machine_id:mid,badge_no:a.badge,uph:a.uph,bonded_unit:a.bonded,last_scan_ts:a.lastScan||null,pkg_mpc:a.pkgMpc,max_uph:maxUphMap.get(mid)??null})).sort((a,b)=>b.bonded_unit-a.bonded_unit);
         return reply.send({status:'ok', data:out});
       } catch (err) { return unavail(reply, err instanceof Error ? err.message : String(err)); }
     }
