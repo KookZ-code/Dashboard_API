@@ -8,6 +8,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config.js';
 import { pool } from './db.js';
 import { initReplica, startReplicaSync } from './db-sqlite.js';
+import { oracleCache } from './db-oracle.js';
 import masterRoutes      from './routes/master.js';
 import overviewRoutes    from './routes/overview.js';
 import utilizationRoutes from './routes/utilization.js';
@@ -117,6 +118,15 @@ try {
   await initReplica();
   console.log('[db] central.db replica ready');
   startReplicaSync();
+
+  // Initialize Oracle cache (ISO/FS data)
+  await oracleCache.initialize();
+  if (oracleCache.enabled) {
+    console.log('[db] Oracle cache initialized (ISO/FS)');
+  } else {
+    console.log('[db] Oracle disabled — ISO/FS served MSSQL-only');
+  }
+
   await app.listen({ port: config.api.port, host: config.api.host });
 } catch (err) {
   app.log.error(err);

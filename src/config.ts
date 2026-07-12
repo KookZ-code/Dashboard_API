@@ -28,4 +28,12 @@ export const config = {
     secret:      process.env.JWT_SECRET      ?? 'emh-dashboard-jwt-secret-2026',
     expireHours: Number(process.env.JWT_EXPIRE_HOURS ?? 8),
   },
+  // Oracle (ISO/FS) — optional
+  ora_enabled:    process.env.ORA_ENABLED === '1',
+  ora_user:       process.env.ORA_USER ?? '',
+  ora_password:   process.env.ORA_PASSWORD ?? '',
+  ora_dsn:        process.env.ORA_DSN ?? '',
+  ora_client_lib: process.env.ORA_CLIENT_LIB ?? '',
+  ora_view:       process.env.ORA_VIEW ?? 'Vw_Asodowntime_2025on',
+  ora_live_view:  process.env.ORA_LIVE_VIEW ?? 'EQ_USER.V_EQDOWNTIME',
 } as const;
