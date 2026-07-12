@@ -3,6 +3,7 @@ import sql from 'mssql';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authPreHandler, buildWhere, makeReq, parseAreas, C, DOWN_TYPES, r2 } from '../helpers.js';
+import { getOracleHistorical, oracleRowToMssqlFormat } from './ora-util.js';
 
 const v = () => config.view;
 
@@ -31,9 +32,15 @@ export default async function downtimeRoutes(app: FastifyInstance) {
       areas?: string; shift?: string; reason_col?: string; limit?: string;
     }
   }>('/api/v1/downtime/detail', { preHandler: authPreHandler }, async (req, reply) => {
-    const { job_types, start, end, areas, shift, reason_col } = req.query;
+    const { job_types, start, end, areas: areasQs, shift, reason_col } = req.query;
+    const areaList = parseAreas(areasQs);
+
+    // Fetch Oracle data for ISO/FS areas
+    const oracleRows = getOracleHistorical(areaList, start, end, shift);
+    const oracleMssqlFormat = oracleRows.map(oracleRowToMssqlFormat);
+
     const limit   = Math.min(Math.max(parseInt(req.query.limit ?? '20') || 20, 5), 50);
-    const { where, params } = buildWhere({ start, end, areas, shift });
+    const { where, params } = buildWhere({ start, end, areas: areasQs, shift });
     const reasonC = reason_col === 'des_job' ? C.SYM : C.CAUSE;
     const jtList  = job_types ? job_types.split(',').map(j => j.trim()).filter(Boolean) : [...DOWN_TYPES];
     const jtIn    = jtList.map(j => `'${j}'`).join(', ');
@@ -74,7 +81,30 @@ export default async function downtimeRoutes(app: FastifyInstance) {
       `),
     ]);
 
-    const reasonRows  = reasonRs.recordset as any[];
+    // Aggregate Oracle rows by reason (des_job or cause)
+    const oracleReasonAgg = new Map<string, { reason: string; cnt: number; hours: number; avg_repair_min: number }>();
+    for (const r of oracleRows.filter(r => jtList.includes(r.job_type))) {
+      const reasonVal = reason_col === 'des_job' ? r.symptom : r.cause;
+      if (!reasonVal) continue;
+      const key = reasonVal;
+      if (!oracleReasonAgg.has(key)) {
+        oracleReasonAgg.set(key, { reason: reasonVal, cnt: 0, hours: 0, avg_repair_min: 0 });
+      }
+      const row = oracleReasonAgg.get(key)!;
+      row.cnt += 1;
+      row.hours += r.repair_min / 60;
+      row.avg_repair_min += r.repair_min;
+    }
+    for (const [_, row] of oracleReasonAgg) {
+      row.avg_repair_min = row.cnt > 0 ? Math.round(row.avg_repair_min / row.cnt) : 0;
+    }
+
+    // Merge reason rows
+    const reasonRows = [
+      ...(reasonRs.recordset as any[]),
+      ...Array.from(oracleReasonAgg.values()),
+    ].sort((a, b) => (b.hours || 0) - (a.hours || 0));
+
     const totalHours  = reasonRows.reduce((s, r) => s + (Number(r.hours) || 0), 0);
     const totalEvents = reasonRows.reduce((s, r) => s + (Number(r.cnt) || 0), 0);
     const avgRepairH  = totalEvents > 0 ? r2(totalHours / totalEvents) : 0;
@@ -91,20 +121,64 @@ export default async function downtimeRoutes(app: FastifyInstance) {
       };
     });
 
-    const mrRows = (mrRs.recordset as any[]).map(r => ({
-      code_machine: String(r.code_machine ?? ''),
-      area:         String(r.area ?? ''),
-      reason:       String(r.reason ?? ''),
-      hours:        Number(r.hours ?? 0),
-    }));
+    // Merge machines by reason (MSSQL + Oracle)
+    const oracleMrRows = oracleRows
+      .filter(r => jtList.includes(r.job_type))
+      .map(r => ({
+        code_machine: r.machine_id,
+        area: r.area,
+        reason: reason_col === 'des_job' ? r.symptom : r.cause,
+        hours: r.repair_min / 60,
+      }))
+      .filter(r => r.reason);
+
+    const mrRows = [
+      ...(mrRs.recordset as any[]).map(r => ({
+        code_machine: String(r.code_machine ?? ''),
+        area: String(r.area ?? ''),
+        reason: String(r.reason ?? ''),
+        hours: Number(r.hours ?? 0),
+      })),
+      ...oracleMrRows,
+    ];
     const machinesByReason = pivotMachinesByReason(mrRows);
     const topMachine  = (machinesByReason[0] as any)?.code_machine ?? '—';
     const topMachineH = r2(Number((machinesByReason[0] as any)?.total_hours ?? 0));
 
+    // Merge shift breakdown (MSSQL + Oracle)
+    const oracleShiftAgg = new Map<string, { day: string; shift_name: string; events: number; repair_hrs: number; wait_hrs: number }>();
+    for (const r of oracleRows.filter(r => jtList.includes(r.job_type) && r.datex)) {
+      const dt = r.datex;
+      const hour = dt.getHours();
+      const day = hour >= 19
+        ? new Date(dt.getTime() + 24 * 3600000).toISOString().split('T')[0]
+        : dt.toISOString().split('T')[0];
+      const shiftName = (hour >= 7 && hour <= 18) ? 'Day' : 'Night';
+      const key = `${day}|${shiftName}`;
+
+      if (!oracleShiftAgg.has(key)) {
+        oracleShiftAgg.set(key, { day, shift_name: shiftName, events: 0, repair_hrs: 0, wait_hrs: 0 });
+      }
+      const row = oracleShiftAgg.get(key)!;
+      row.events += 1;
+      row.repair_hrs += r.repair_min / 60;
+      row.wait_hrs += r.wait_min / 60;
+    }
+
+    const dailyShift = [
+      ...(shiftRs.recordset as any[]),
+      ...Array.from(oracleShiftAgg.values()),
+    ].sort((a, b) => {
+      const dayCompare = String(a.day).localeCompare(String(b.day));
+      if (dayCompare !== 0) return dayCompare;
+      const shiftOrder = { 'Day': 0, 'Night': 1 };
+      return (shiftOrder[a.shift_name as keyof typeof shiftOrder] ?? 99) - (shiftOrder[b.shift_name as keyof typeof shiftOrder] ?? 99);
+    });
+
     return reply.send({ status: 'ok', data: {
       reason:             reasons,
       machines_by_reason: machinesByReason,
-      daily_shift:        shiftRs.recordset,
+      daily_shift:        dailyShift,
       kpi: { total_hours: r2(totalHours), total_events: totalEvents, avg_repair_h: avgRepairH, top_machine: topMachine, top_machine_h: topMachineH },
     }});
   });
@@ -112,6 +186,13 @@ export default async function downtimeRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { areas?: string } }>(
     '/api/v1/downtime/machines', { preHandler: authPreHandler }, async (req, reply) => {
       const areaList = parseAreas(req.query.areas);
+
+      // Get Oracle machines with M/C DOWN
+      const oracleMachines = getOracleHistorical(areaList, null, null, null)
+        .filter(r => r.job_type === 'M/C DOWN')
+        .map(r => r.machine_id);
+      const oracleMachinesSet = new Set(oracleMachines);
+
       const clauses  = [`[${C.JT}] = 'M/C DOWN'`];
       const req2     = pool.request();
       if (areaList?.length) {
@@ -123,7 +204,12 @@ export default async function downtimeRoutes(app: FastifyInstance) {
         SELECT DISTINCT [${C.MID}] AS machine_id
         FROM ${v()} WHERE ${clauses.join(' AND ')} ORDER BY [${C.MID}]
       `);
-      return reply.send({ status: 'ok', data: { machines: (rs.recordset as any[]).map(r => r.machine_id) } });
+
+      // Merge MSSQL + Oracle machines
+      const mssqlMachines = (rs.recordset as any[]).map(r => r.machine_id);
+      const allMachines = [...new Set([...mssqlMachines, ...oracleMachines])].sort();
+
+      return reply.send({ status: 'ok', data: { machines: allMachines } });
     }
   );
 
