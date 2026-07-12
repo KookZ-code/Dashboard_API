@@ -7,6 +7,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config.js';
 import { pool } from './db.js';
+import { initReplica, startReplicaSync } from './db-sqlite.js';
 import masterRoutes      from './routes/master.js';
 import overviewRoutes    from './routes/overview.js';
 import utilizationRoutes from './routes/utilization.js';
@@ -113,6 +114,9 @@ try {
   console.log('[db] Connected to SQL Server');
   await ensurePermissionsTable();
   console.log('[db] Auth tables ready');
+  await initReplica();
+  console.log('[db] central.db replica ready');
+  startReplicaSync();
   await app.listen({ port: config.api.port, host: config.api.host });
 } catch (err) {
   app.log.error(err);

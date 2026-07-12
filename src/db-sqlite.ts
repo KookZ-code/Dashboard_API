@@ -1,8 +1,15 @@
-// SQLite helper for WB-UPH central.db
-// better-sqlite3 can't open UNC network share paths directly.
-// Strategy (mirrors Rust wb_uph_repo.rs): copy the share file to a local temp
-// directory on first access, then serve the cached copy. Re-copy only when the
-// source file's mtime changes (stale-while-revalidate).
+// SQLite helper for WB-UPH central.db.
+//
+// central.db is kept as a replica at C:\uph_replica\central.db, refreshed by
+// a separate infra-owned replication job (not this process) — dashboard-api
+// just reads it. We don't control how that job updates the file (in-place
+// write vs atomic replace), so rather than assume, we periodically check its
+// mtime and reopen on change. This never runs on the request path: only the
+// startup sync and a background timer touch the filesystem.
+//
+// If CENTRAL_DB_PATH ever points to a UNC network share again (no local
+// replica available), we transparently fall back to copy-to-temp-then-open,
+// since better-sqlite3 can't open UNC paths directly.
 
 import Database from 'better-sqlite3';
 import fs from 'fs';
@@ -10,9 +17,8 @@ import path from 'path';
 import os from 'os';
 
 interface CacheState {
-  localPath: string;
   sourceMtime: number;
-  db: Database.Database | null;
+  db: Database.Database;
 }
 
 let cache: CacheState | null = null;
@@ -22,80 +28,73 @@ function getSourcePath(): string | null {
   return process.env.CENTRAL_DB_PATH?.trim() || null;
 }
 
+function getSyncIntervalMs(): number {
+  return Number(process.env.REPLICA_SYNC_INTERVAL_MS ?? 5 * 60_000);
+}
+
 function isNetworkPath(p: string): boolean {
   return p.startsWith('\\\\') || p.startsWith('//');
 }
 
-function localCachePath(): string {
+function localCopyPath(): string {
   return path.join(os.tmpdir(), 'dashboard_api_central.db');
-}
-
-function copyToLocal(src: string): string {
-  const dest = localCachePath();
-  fs.copyFileSync(src, dest);
-  return dest;
 }
 
 function openDb(filePath: string): Database.Database {
   return new Database(filePath, { readonly: true, fileMustExist: true });
 }
 
-export function getSqliteDb(): Database.Database | null {
+function swap(newDb: Database.Database, mtime: number): void {
+  const old = cache?.db;
+  cache = { sourceMtime: mtime, db: newDb };
+  if (old) try { old.close(); } catch {}
+}
+
+/** Refresh the DB handle if the source file changed. Never called from a
+ *  request handler — only from the startup sync and the background timer. */
+async function syncReplica(): Promise<void> {
   const src = getSourcePath();
-  if (!src) return null;
+  if (!src) return;
 
+  let srcMtime: number;
   try {
-    // Local path — open directly, no cache needed
-    if (!isNetworkPath(src)) {
-      if (!cache || cache.localPath !== src) {
-        if (cache?.db) try { cache.db.close(); } catch {}
-        const db = openDb(src);
-        cache = { localPath: src, sourceMtime: 0, db };
-      }
-      return cache.db;
-    }
-
-    // Network path — need a local copy
-    const srcMtime = (() => {
-      try { return fs.statSync(src).mtimeMs; } catch { return -1; }
-    })();
-
-    if (srcMtime < 0) return null; // share unreachable
-
-    // Cache hit — same mtime
-    if (cache && cache.sourceMtime === srcMtime && cache.db) {
-      try { cache.db.prepare('SELECT 1').get(); return cache.db; } catch { cache.db = null; }
-    }
-
-    // Cache miss or mtime changed — copy file
-    if (!syncing) {
-      syncing = true;
-      if (cache === null) {
-        // First access — copy synchronously so this request has data
-        try {
-          const localPath = copyToLocal(src);
-          const db = openDb(localPath);
-          if (cache?.db) try { cache.db.close(); } catch {}
-          cache = { localPath, sourceMtime: srcMtime, db };
-        } finally {
-          syncing = false;
-        }
-      } else {
-        // Refresh in background — serve stale while copying
-        setImmediate(() => {
-          try {
-            const localPath = copyToLocal(src);
-            const newDb = openDb(localPath);
-            const old = cache?.db;
-            cache = { localPath, sourceMtime: srcMtime, db: newDb };
-            if (old) try { old.close(); } catch {}
-          } finally { syncing = false; }
-        });
-      }
-    }
-
-    return cache?.db ?? null;
+    srcMtime = fs.statSync(src).mtimeMs;
   } catch {
-    return null;
+    return; // replica/share unreachable — keep serving the existing handle, if any
   }
+
+  if (cache && cache.sourceMtime === srcMtime) return; // unchanged
+  if (syncing) return; // a sync is already in flight
+  syncing = true;
+  try {
+    if (isNetworkPath(src)) {
+      const dest = localCopyPath();
+      await fs.promises.copyFile(src, dest);
+      swap(openDb(dest), srcMtime);
+    } else {
+      swap(openDb(src), srcMtime);
+    }
+  } finally {
+    syncing = false;
+  }
+}
+
+/** Do the first sync and await it — call once before the server starts
+ *  accepting traffic so the first requests aren't served stale/empty. */
+export async function initReplica(): Promise<void> {
+  await syncReplica();
+}
+
+/** Start the periodic background refresh. Errors are swallowed per-tick —
+ *  a transient outage just means the next tick retries. */
+export function startReplicaSync(): void {
+  setInterval(() => {
+    syncReplica().catch(() => {});
+  }, getSyncIntervalMs());
+}
+
+/** Request-path accessor — returns whatever DB handle is current.
+ *  Never touches the filesystem. */
+export function getSqliteDb(): Database.Database | null {
+  return cache?.db ?? null;
 }

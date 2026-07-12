@@ -54,18 +54,18 @@ export default async function utilizationRoutes(app: FastifyInstance) {
           GROUP BY [${C.MID}],[${C.AREA}] HAVING COUNT(*) >= 2 ORDER BY total_hours DESC
         `),
         makeReq(params).query(`
-          SELECT TOP 10 [${C.CAUSE}] AS reason,
+          SELECT TOP 10 [${C.SYM}] AS reason,
                  SUM(DATEDIFF(MINUTE,[${C.TECH}],[${C.END}]))/60.0 AS hours, COUNT(*) AS events
           FROM ${v()} ${where} AND [${C.JT}] IN (${downIn})
-          AND [${C.CAUSE}] IS NOT NULL AND [${C.CAUSE}] != ''
-          GROUP BY [${C.CAUSE}] ORDER BY hours DESC
+          AND [${C.SYM}] IS NOT NULL AND [${C.SYM}] != ''
+          GROUP BY [${C.SYM}] ORDER BY hours DESC
         `),
         makeReq(params).query(`
-          SELECT TOP 10 [${C.CAUSE}] AS reason,
+          SELECT TOP 10 [${C.SYM}] AS reason,
                  SUM(DATEDIFF(MINUTE,[${C.TECH}],[${C.END}]))/60.0 AS hours, COUNT(*) AS events
           FROM ${v()} ${where} AND [${C.JT}] IN (${lostIn})
-          AND [${C.CAUSE}] IS NOT NULL AND [${C.CAUSE}] != ''
-          GROUP BY [${C.CAUSE}] ORDER BY hours DESC
+          AND [${C.SYM}] IS NOT NULL AND [${C.SYM}] != ''
+          GROUP BY [${C.SYM}] ORDER BY hours DESC
         `),
       ]);
 

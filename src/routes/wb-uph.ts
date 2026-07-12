@@ -62,11 +62,17 @@ function carryoverBaseline(startSecs: number, firstTs: string, firstBonded: numb
   return (elapsed > 0 && firstUph > 0 && firstBonded / elapsed > firstUph * 2) ? firstBonded : 0;
 }
 
+// Lot carryover from a prior shift never spans more than a couple of days in
+// practice — bounding the lookback keeps this query's cost flat as central.db
+// grows, instead of rescanning the entire table's history on every call.
+const PRE_BASELINE_LOOKBACK_DAYS = 2;
+
 function loadPreBaselines(db: NonNullable<ReturnType<typeof getSqliteDb>>, start: string): Map<string, number> {
   const rows = db.prepare(
     `SELECT machine_id, lot_id, bonded_unit FROM uph_records
-     WHERE voided=0 AND created_at < ? ORDER BY machine_id, lot_id, created_at DESC`
-  ).all(start) as Array<{machine_id:string; lot_id:string; bonded_unit:number}>;
+     WHERE voided=0 AND created_at < ? AND created_at >= datetime(?, '-${PRE_BASELINE_LOOKBACK_DAYS} days')
+     ORDER BY machine_id, lot_id, created_at DESC`
+  ).all(start, start) as Array<{machine_id:string; lot_id:string; bonded_unit:number}>;
   const m = new Map<string,number>();
   for (const r of rows) { const k=`${r.machine_id}\0${r.lot_id}`; if(!m.has(k)) m.set(k,r.bonded_unit); }
   return m;
