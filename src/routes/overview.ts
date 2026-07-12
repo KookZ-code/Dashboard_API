@@ -3,6 +3,7 @@ import sql from 'mssql';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authPreHandler, parseAreas } from '../helpers.js';
+import { getOracleLive } from './ora-util.js';
 
 const mt = () => config.machineTable;
 
@@ -135,6 +136,25 @@ export default async function overviewRoutes(app: FastifyInstance) {
     '/api/v1/overview/open-jobs', { preHandler: authPreHandler }, async (req, reply) => {
       const { areas, job_type } = req.query;
       const areaList = parseAreas(areas);
+
+      // Get Oracle live jobs for ISO/FS areas
+      const oracleLiveRows = getOracleLive(areaList);
+      const oracleJobs = oracleLiveRows.map(r => ({
+        code_machine: r.machine_id,
+        area: r.area,
+        job_type: r.job_type,
+        des_job: r.des_job || null,
+        datex: new Date().toISOString(), // Oracle doesn't give exact start, use now
+        date_ack: r.status === 'Waiting' ? null : new Date().toISOString(), // rough approx
+        tech: r.badge || null,
+        wait_min: r.wait_min,
+        repair_min: r.repair_min,
+        status: r.status,
+        die_mask: r.die_mask || null,
+        package_type: r.package_type || null,
+        wire_type: null,
+      }));
+
       const jobReq = pool.request();
       let extra = '';
       if (areaList?.length) {
@@ -160,7 +180,7 @@ export default async function overviewRoutes(app: FastifyInstance) {
         ORDER BY datex ASC
       `);
 
-      const jobs = (rs.recordset as any[]).map(r => ({
+      const mssqlJobs = (rs.recordset as any[]).map(r => ({
         code_machine: String(r.code_machine ?? ''),
         area:         String(r.area ?? ''),
         job_type:     String(r.job_type ?? ''),
@@ -175,6 +195,12 @@ export default async function overviewRoutes(app: FastifyInstance) {
         package_type: r.package_type ?? null,
         wire_type:    r.wire_type ?? null,
       }));
+
+      // Merge and filter by job_type if specified
+      let jobs = [...mssqlJobs, ...oracleJobs];
+      if (job_type) {
+        jobs = jobs.filter(j => j.job_type === job_type);
+      }
 
       return reply.send({ status: 'ok', data: jobs });
     }
