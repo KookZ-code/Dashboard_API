@@ -21,6 +21,7 @@ import wbUphRoutes       from './routes/wb-uph.js';
 import daUphRoutes       from './routes/da-uph.js';
 import debugRoutes       from './routes/debug.js';
 import liveRoutes        from './routes/live.js';
+import wvmRoutes         from './routes/wvm.js';
 import authRoutes        from './routes/auth.js';
 import usersRoutes       from './routes/users.js';
 import permissionsRoutes, { ensurePermissionsTable } from './routes/permissions.js';
@@ -43,6 +44,7 @@ await app.register(swagger, {
       { name: 'da',          description: 'Die Attach packages & report' },
       { name: 'wb-uph',      description: 'WB UPH monitor (SQLite central.db)' },
       { name: 'da-uph',      description: 'DA UPH monitor (PostgreSQL)' },
+      { name: 'wvm',         description: 'WVM setup lots (Wire Bond verification)' },
       { name: 'auth',        description: 'Authentication, users & permissions' },
     ],
   },
@@ -66,6 +68,7 @@ const TAG_MAP: [string, string][] = [
   ['/api/v1/tech/',        'tech'],
   ['/api/v1/wb/',          'wb'],
   ['/api/v1/da/',          'da'],
+  ['/api/v1/wvm-setup-lots', 'wvm'],
   ['/api/v1/health',       'health'],
   ['/api/v1/live/',        'live'],
   ['/api/v1/auth/',        'auth'],
@@ -103,6 +106,7 @@ await app.register(wbRoutes);
 await app.register(daRoutes);
 await app.register(wbUphRoutes);
 await app.register(daUphRoutes);
+await app.register(wvmRoutes);
 await app.register(debugRoutes);
 await app.register(liveRoutes);
 await app.register(authRoutes);
