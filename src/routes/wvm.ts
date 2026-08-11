@@ -21,6 +21,8 @@ interface WvmRow {
   date_close: string | null;
   package: string | null;
   wire_type: string | null;
+  process_type: string | null;
+  by_perform: string | null;
   mpc: string | null;
 }
 
@@ -111,7 +113,8 @@ export default async function wvmRoutes(app: FastifyInstance) {
         SELECT
           lot_no, code_machine AS machine, job_type, des_job,
           req AS requested_by, date_close,
-          [Package Type] AS package, [Wire Type] AS wire_type, mpc
+          [Package Type] AS package, [Wire Type] AS wire_type,
+          [Process Type] AS process_type, by_perform, mpc
         FROM ${WVM_VIEW}
         WHERE date_close BETWEEN @date_start AND @date_end ${extra}
         ORDER BY date_close ASC
@@ -128,6 +131,8 @@ export default async function wvmRoutes(app: FastifyInstance) {
           r.date_close instanceof Date ? r.date_close.toISOString() : null,
         package: r.package ?? null,
         wire_type: r.wire_type ?? null,
+        process_type: r.process_type ?? null,
+        by_perform: r.by_perform ?? null,
         mpc: r.mpc ?? null,
       }));
 
