@@ -241,7 +241,7 @@ export default async function wbUphRoutes(app: FastifyInstance): Promise<void> {
         }
         const maxUphRows = db.prepare(
           `SELECT machine_id, MAX(uph) AS max_uph
-           FROM uph_records WHERE voided=0 AND created_at >= datetime(?, '-3 days') AND created_at <= ? ${pkgClause}
+           FROM uph_records WHERE voided=0 AND created_at >= datetime(?, '-1 days') AND created_at <= ? ${pkgClause}
            GROUP BY machine_id`
         ).all(w.start, w.end, ...pkgArgs) as Array<{machine_id:string; max_uph:number}>;
         const maxUphMap = new Map(maxUphRows.map(r => [r.machine_id, r.max_uph]));
