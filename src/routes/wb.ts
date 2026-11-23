@@ -117,6 +117,7 @@ async function queryShiftEvents(shiftStart: string, shiftEnd: string, refDate: s
           AND [datex]      <  @shift_end
           AND [date_close] IS NOT NULL
           AND [date_close] >  [datex]
+          AND UPPER(ISNULL([cause],'')) NOT IN ('CANCEL', 'N/A')
     ),
     pkg_scan AS (
         SELECT RTRIM(LTRIM([code_machine])) AS code_machine,
