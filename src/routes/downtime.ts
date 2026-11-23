@@ -175,13 +175,53 @@ export default async function downtimeRoutes(app: FastifyInstance) {
       return (shiftOrder[a.shift_name as keyof typeof shiftOrder] ?? 99) - (shiftOrder[b.shift_name as keyof typeof shiftOrder] ?? 99);
     });
 
+    // Per-event averages from the shift breakdown (MSSQL + Oracle), same basis as the Rust kpi.
+    const shiftEvents    = dailyShift.reduce((s, r: any) => s + Number(r.events ?? 0), 0);
+    const shiftRepairMin = dailyShift.reduce((s, r: any) => s + Number(r.repair_hrs ?? 0) * 60, 0);
+    const shiftWaitMin   = dailyShift.reduce((s, r: any) => s + Number(r.wait_hrs ?? 0) * 60, 0);
+    const avgRepairMin   = shiftEvents > 0 ? r2(shiftRepairMin / shiftEvents) : 0;
+    const avgWaitMin     = shiftEvents > 0 ? r2(shiftWaitMin / shiftEvents) : 0;
+
     return reply.send({ status: 'ok', data: {
       reason:             reasons,
       machines_by_reason: machinesByReason,
       daily_shift:        dailyShift,
-      kpi: { total_hours: r2(totalHours), total_events: totalEvents, avg_repair_h: avgRepairH, top_machine: topMachine, top_machine_h: topMachineH },
+      kpi: {
+        total_hours:    r2(totalHours),
+        total_events:   totalEvents,
+        avg_repair_min: avgRepairMin,
+        avg_wait_min:   avgWaitMin,
+        avg_repair_h:   avgRepairH,
+        top_machine:    topMachine,
+        top_machine_h:  topMachineH,
+      },
     }});
   });
+
+  // Top N machines by M/C DOWN hours. MSSQL only (no Oracle merge), matching Rust DowntimeRepo::top_machines.
+  app.get<{ Querystring: { start?: string; end?: string; areas?: string; shift?: string; limit?: string } }>(
+    '/api/v1/downtime/top-machines', { preHandler: authPreHandler }, async (req, reply) => {
+      const { start, end, areas, shift } = req.query;
+      const limit = Math.min(Math.max(parseInt(req.query.limit ?? '10') || 10, 5), 20);
+      const { where, params } = buildWhere({ start, end, areas, shift });
+      const rs = await makeReq(params).query(`
+        SELECT TOP ${limit} [${C.MID}] AS machine_id, [${C.AREA}] AS area,
+               ROUND(CAST(SUM(DATEDIFF(MINUTE,[${C.TECH}],[${C.END}])) AS FLOAT)/60.0, 1) AS down_hours,
+               COUNT(*) AS event_count,
+               ROUND(CAST(AVG(DATEDIFF(MINUTE,[${C.TECH}],[${C.END}])) AS FLOAT), 0) AS avg_mttr_min
+        FROM ${v()} ${where} AND [${C.JT}] = 'M/C DOWN'
+        GROUP BY [${C.MID}],[${C.AREA}] ORDER BY down_hours DESC
+      `);
+      const rows = (rs.recordset as any[]).map(r => ({
+        machine_id:   String(r.machine_id ?? ''),
+        area:         String(r.area ?? ''),
+        down_hours:   Number(r.down_hours ?? 0),
+        event_count:  Number(r.event_count ?? 0),
+        avg_mttr_min: Number(r.avg_mttr_min ?? 0),
+      }));
+      return reply.send({ status: 'ok', data: { rows } });
+    }
+  );
 
   app.get<{ Querystring: { areas?: string } }>(
     '/api/v1/downtime/machines', { preHandler: authPreHandler }, async (req, reply) => {

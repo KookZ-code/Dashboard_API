@@ -6,6 +6,8 @@ import type { FastifyInstance } from 'fastify';
 import sql from 'mssql';
 import { pool } from '../db.js';
 import { config } from '../config.js';
+import { TechAccumulator } from '../techStats.js';
+import { isValidIsoDate, shiftTrend7day } from '../shiftTrend.js';
 
 // ── Job type sets — api_server.py lines 1190-1191 ────────────────────────
 const LOST_TYPES = new Set([
@@ -36,6 +38,7 @@ interface OpenJob {
   des_job: string | null;
   t_start: string;
   dur_min: number;
+  tech_name: string | null;
 }
 
 interface WbEvent {
@@ -45,6 +48,7 @@ interface WbEvent {
   des_job: string;
   dur_min: number;
   is_open: boolean;
+  wait_min?: number; // closed events only (open jobs have no wait yet)
 }
 
 interface MachineRow {
@@ -150,8 +154,9 @@ async function queryOpenJobs(): Promise<OpenJob[]> {
            job_type,
            des_job,
            FORMAT(datex, 'HH:mm')           AS t_start,
-           DATEDIFF(MINUTE, datex, GETDATE()) AS dur_min
-    FROM dbo.job_list
+           DATEDIFF(MINUTE, datex, GETDATE()) AS dur_min,
+           NULLIF(RTRIM(LTRIM(ISNULL(by_perform, by_ack))), '') AS tech_name
+    FROM ${config.jobTable}
     WHERE id_operation = 'WB'
       AND date_close IS NULL
       AND code_machine != ''
@@ -266,6 +271,7 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
 
     // ── Per-machine accumulation — api_server.py lines 1196-1251 ─────
     const machineRows: MachineRow[] = [];
+    const tech = new TechAccumulator(); // technician stats over the reported machines
 
     for (const mid of target) {
       let waitDown = 0, downMin = 0, waitSetup = 0, setupMin = 0;
@@ -285,10 +291,12 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
 
         if (jt === 'M/C DOWN') {
           waitDown += wt;  downMin  += repair;
+          if (ev.tech_name) tech.closedDown(ev.tech_name, ev.datex, repair);
         } else if (LOST_TYPES.has(jt)) {
           waitSetup += wt; setupMin  += repair;
           if (jt === 'SETUP BY OPERATOR') sboMin       += repair;
           if (SETUP_CONV.has(jt))          setupConvMin += repair;
+          if (ev.tech_name && SETUP_CONV.has(jt)) tech.closedSetup(ev.tech_name, ev.datex, repair);
         }
 
         eventList.push({
@@ -298,6 +306,7 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
           des_job:  ev.des_job ?? '',
           dur_min:  repair + wt,
           is_open:  false,
+          wait_min: wt,
         });
       }
 
@@ -306,6 +315,9 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
         const jt = (oj.job_type ?? '').toUpperCase();
         if (jt === 'M/C DOWN')          waitDown  += oj.dur_min;
         else if (LOST_TYPES.has(jt))    waitSetup += oj.dur_min;
+        if (oj.tech_name && (jt === 'M/C DOWN' || SETUP_CONV.has(jt))) {
+          tech.openJob(oj.tech_name, `${mid}:${oj.t_start}:${oj.des_job ?? ''}`);
+        }
         eventList.push({
           job_type: oj.job_type,
           t_start:  oj.t_start,
@@ -340,14 +352,6 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
     const n        = machineRows.length;
     const fleetMin = n * SHIFT_MIN;
     const avgUtil  = n > 0 ? machineRows.reduce((s, r) => s + r.util_pct, 0) / n : 0;
-    // Count only real technician job types — exclude SBO operators (by_ack = operator badge)
-    const TECH_JT = new Set(['M/C DOWN', 'ENGINEERING DOWN', 'FACILITY DOWN', 'SETUP', 'CONVERT']);
-    const techSet = new Set(
-      events
-        .filter(e => e.tech_name && TECH_JT.has((e.job_type ?? '').toUpperCase().trim()))
-        .map(e => e.tech_name)
-    );
-
     const sum = (fn: (r: MachineRow) => number) => machineRows.reduce((s, r) => s + fn(r), 0);
     const pct = (mins: number) => fleetMin > 0 ? round1(mins / fleetMin * 100) : 0;
 
@@ -362,12 +366,27 @@ export default async function wbRoutes(app: FastifyInstance): Promise<void> {
       wait_pct:       pct(sum(r => r.wait_down_min + r.wait_setup_min)),
       setup_conv_pct: pct(sum(r => r.setup_conv_min)),
       sbo_pct:        pct(sum(r => r.sbo_min)),
-      n_tech:         techSet.size,
+      n_tech:         tech.nTech,
     };
 
     return reply.send({
       status: 'ok',
-      data: { machines: machineRows, kpi, pkg_label: pkgLabel, shift, time_range: timeRange },
+      data: { machines: machineRows, kpi, pkg_label: pkgLabel, shift, time_range: timeRange, ...tech.result() },
     });
+  });
+
+  // ── wb/report-7day ─────────────────────────────────────────────────────────
+  app.get<{ Querystring: { date?: string; packages?: string } }>('/api/v1/wb/report-7day', {
+    preHandler: async (req, reply) => {
+      if (config.api.key && req.headers['x-api-key'] !== config.api.key) {
+        await reply.code(401).send({ status: 'error', error: { code: 401, message: 'Invalid API key' } });
+      }
+    },
+  }, async (req, reply) => {
+    const { date, packages = '__ALL__' } = req.query;
+    if (!date || !isValidIsoDate(date)) {
+      return reply.code(400).send({ status: 'error', error: { code: 400, message: 'date (YYYY-MM-DD) required' } });
+    }
+    return reply.send({ status: 'ok', data: await shiftTrend7day('WB', date, packages) });
   });
 }

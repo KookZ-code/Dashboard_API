@@ -28,6 +28,11 @@ export const config = {
     secret:      process.env.JWT_SECRET      ?? 'emh-dashboard-jwt-secret-2026',
     expireHours: Number(process.env.JWT_EXPIRE_HOURS ?? 8),
   },
+  // Microchip Account API — badge + password check at login (same as Rust backend)
+  microchip: {
+    apiUrl:      process.env.MICROCHIP_API_URL ?? 'http://mth-sv-assykam/assyapi/api/MicrochipAccount',
+    timeoutSecs: Number(process.env.MICROCHIP_TIMEOUT_SECS ?? 15),
+  },
   // Oracle (ISO/FS) — optional
   ora_enabled:    process.env.ORA_ENABLED === '1',
   ora_user:       process.env.ORA_USER ?? '',

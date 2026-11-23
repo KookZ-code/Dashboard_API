@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import sql from 'mssql';
 import { pool } from '../db.js';
 import { config } from '../config.js';
-import { authPreHandler, parseAreas } from '../helpers.js';
+import { authPreHandler, buildWhere, makeReq, parseAreas, C, r2 } from '../helpers.js';
 import { getOracleLive } from './ora-util.js';
 
 const mt = () => config.machineTable;
@@ -128,7 +128,19 @@ export default async function overviewRoutes(app: FastifyInstance) {
         total:      Number(r.total ?? 0),
       }));
 
-      return reply.send({ status: 'ok', data: { kpi, matrix, updated_at: new Date().toISOString() } });
+      // Response keys follow the Rust backend contract (the frontend maps these names).
+      return reply.send({ status: 'ok', data: {
+        kpi: {
+          total_machines:    kpi.key_machines,
+          running:           kpi.running,
+          down:              kpi.mc_down,
+          waiting:           kpi.waiting_for_tech,
+          on_process:        kpi.on_process,
+          closed_this_shift: kpi.closed_this_shift,
+        },
+        status_matrix: matrix,
+        updated_at:    new Date().toISOString(),
+      } });
     }
   );
 
@@ -202,7 +214,58 @@ export default async function overviewRoutes(app: FastifyInstance) {
         jobs = jobs.filter(j => j.job_type === job_type);
       }
 
-      return reply.send({ status: 'ok', data: jobs });
+      return reply.send({ status: 'ok', data: { jobs } });
     }
   );
+
+  // MTBF per machine + fleet, derived from M/C DOWN events (no dedicated MTBF table).
+  // Fleet MTBF = total uptime / total failures, not an average of per-machine MTBFs.
+  // Port of Rust OverviewRepo::mtbf. Span defaults to 24h when start/end are missing.
+  app.get<{ Querystring: { start?: string; end?: string; areas?: string; shift?: string } }>(
+    '/api/v1/overview/mtbf', { preHandler: authPreHandler }, async (req, reply) => {
+      const { start, end, areas, shift } = req.query;
+      const { where, params } = buildWhere({ start, end, areas, shift });
+      const rs = await makeReq(params).query(`
+        SELECT [${C.MID}] AS machine_id,
+               SUM(DATEDIFF(MINUTE,[${C.TECH}],[${C.END}])) AS down_min,
+               COUNT(*) AS down_events
+        FROM ${config.view} ${where} AND [${C.JT}] = 'M/C DOWN'
+        GROUP BY [${C.MID}]
+      `);
+
+      const spanH = spanHours(start, end);
+      let totalDownMin = 0;
+      let totalEvents  = 0;
+      const machines = (rs.recordset as any[]).map(r => {
+        const downMin = Number(r.down_min ?? 0);
+        const events  = Number(r.down_events ?? 0);
+        totalDownMin += downMin;
+        totalEvents  += events;
+        return {
+          machine_id:  String(r.machine_id ?? ''),
+          mtbf_hours:  r2(Math.max(0, (spanH - downMin / 60) / events)),
+          down_events: events,
+        };
+      }).sort((a, b) => b.mtbf_hours - a.mtbf_hours);
+
+      // 0 is a sentinel for "no failures observed"; fleet_down_events == 0 tells them apart.
+      const fleetMtbf = totalEvents > 0
+        ? r2((spanH * rs.recordset.length - totalDownMin / 60) / totalEvents)
+        : 0;
+
+      return reply.send({ status: 'ok', data: {
+        fleet_mtbf_hours:  fleetMtbf,
+        fleet_down_events: totalEvents,
+        machines,
+      } });
+    }
+  );
+}
+
+/** Span of the requested window in hours (inclusive of both days); 24h if either date is missing or invalid. */
+function spanHours(start?: string, end?: string): number {
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  if (!start || !end || !re.test(start) || !re.test(end)) return 24;
+  const days = Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1;
+  return Number.isNaN(days) ? 24 : days * 24;
 }
