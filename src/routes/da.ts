@@ -132,8 +132,12 @@ async function queryShiftEvents(shiftStart: string, shiftEnd: string, refDate: s
   return result.recordset;
 }
 
-async function queryOpenJobs(): Promise<OpenJob[]> {
-  const result = await pool.request().query<OpenJob>(`
+// Open DA jobs that started inside this shift window (same filter as the Rust report).
+async function queryOpenJobs(shiftStart: string, shiftEnd: string): Promise<OpenJob[]> {
+  const req = pool.request();
+  req.input('shift_start', sql.VarChar, shiftStart);
+  req.input('shift_end',   sql.VarChar, shiftEnd);
+  const result = await req.query<OpenJob>(`
     SELECT RTRIM(LTRIM(code_machine))        AS code_machine,
            job_type, des_job,
            FORMAT(datex, 'HH:mm')            AS t_start,
@@ -141,7 +145,8 @@ async function queryOpenJobs(): Promise<OpenJob[]> {
            NULLIF(RTRIM(LTRIM(ISNULL(by_perform, by_ack))), '') AS tech_name
     FROM ${config.jobTable}
     WHERE id_operation = 'DA'
-      AND date_close IS NULL
+      AND datex >= @shift_start AND datex < @shift_end
+      AND (date_close IS NULL OR UPPER(ISNULL([cause],'')) IN ('CANCEL', 'N/A'))
       AND code_machine != ''
       AND LEN(code_machine) > 3`);
   return result.recordset;
@@ -201,7 +206,7 @@ export default async function daRoutes(app: FastifyInstance): Promise<void> {
 
       const [events, openJobs] = await Promise.all([
         queryShiftEvents(shiftStart, shiftEnd, date),
-        queryOpenJobs(),
+        queryOpenJobs(shiftStart, shiftEnd),
       ]);
 
       const machinePkg = new Map<string, string>();
