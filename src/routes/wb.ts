@@ -151,6 +151,7 @@ async function queryShiftEvents(shiftStart: string, shiftEnd: string, refDate: s
 // Open WB jobs that started inside this shift window, same filter as the Rust report.
 // Without the window, old never-closed rows in job_listx count as waiting for years
 // (this produced wait values in the thousands of hours).
+// Rows CANCEL/N/A with date_close set are not still open: measure them up to date_close, not GETDATE().
 async function queryOpenJobs(shiftStart: string, shiftEnd: string): Promise<OpenJob[]> {
   const req = pool.request();
   req.input('shift_start', sql.VarChar, shiftStart);
@@ -160,7 +161,9 @@ async function queryOpenJobs(shiftStart: string, shiftEnd: string): Promise<Open
            job_type,
            des_job,
            FORMAT(datex, 'HH:mm')           AS t_start,
-           DATEDIFF(MINUTE, datex, GETDATE()) AS dur_min,
+           CASE WHEN date_close IS NOT NULL
+                THEN DATEDIFF(MINUTE, datex, date_close)
+                ELSE DATEDIFF(MINUTE, datex, GETDATE()) END AS dur_min,
            NULLIF(RTRIM(LTRIM(ISNULL(by_perform, by_ack))), '') AS tech_name
     FROM ${config.jobTable}
     WHERE id_operation = 'WB'
